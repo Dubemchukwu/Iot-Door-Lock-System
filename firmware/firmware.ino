@@ -33,15 +33,16 @@
 #define BUZZ 4
 
 // Important Constants
-#define STATE_CHECK_INTERVAL 500
-#define LOCK_CHECK_INTERVAL 1000
-#define PIN_CHECK_INTERVAL 5000
+#define STATE_CHECK_INTERVAL 128
+#define LOCK_CHECK_INTERVAL 1010
+#define PIN_CHECK_INTERVAL 5003
 #define WIFI_CHECK_INTERVAL 10000
 #define DOOR_OPEN_INTERVAL 5000
 
 // Connection timeouts
-#define HTTP_TIMEOUT 1500
+#define HTTP_TIMEOUT 750
 #define WIFI_CONNECT_TIMEOUT 10000
+#define WEB_SERVO_THRESHOLD 10000
 
 // System state
 struct {
@@ -54,6 +55,7 @@ struct {
   unsigned long LoadTime = millis();
   unsigned long CheckDelay = millis();
   unsigned long PageDelay = millis();
+  unsigned long WebLockDelay = millis();
   bool CheckPassword = false;
   bool WatchingAPI = false;
   bool PageBool = false;
@@ -74,11 +76,14 @@ struct {
 
 // Servo Controller
 enum ServoPosition {ZERO, HALF, FULL};
-struct {
+struct _SERVO_ {
   bool state = false;
   uint16_t interval = 0;
   ServoPosition position = ZERO;
-} _servo_;
+};
+
+_SERVO_ _servo_;
+_SERVO_ WebServo;
 
 // variables
 char keys[ROWS][COLS] = {
@@ -92,10 +97,12 @@ byte RowPins[ROWS] = {R1, R2, R3, R4};
 byte ColPins[COLS] = {C1, C2, C3, C4};
 const int PIN_CURSOR_COL = 6;
 String InputPin = "";
-enum Page { WELCOME, HOME, RUNNING, RESPONSE};
+enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED};
 Page currentPage = WELCOME;
 enum WPage { once, other};
 WPage StatPage = other;
+enum Actions {STATE, LOCK, PIN};
+Actions actions = STATE;
 unsigned long lastUpdate = 0;
 int animFrame = 0;
 long duration;
@@ -164,49 +171,39 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
-  
   // Non blocking functions
   updateLed();
-  updateServo();
+  updateServoAuto();
+  updateServoMan();
   
   // Check WiFi periodically
   if (now - tWifi >= WIFI_CHECK_INTERVAL) {
     tWifi = now;
     if (!isWifiConnected()) {
-      connectWifi();
+      Serial.println("[WIFI] Wifi - Not Connected");
       switch(StatPage){
         case once:
           WifiPage();
+          connectWifi();
           StatPage = other;
-          Serial.println("[WIFI] Wifi - Not Connected");
+          currentPage = HOME;
           break;
         case other:
-          return;
+          currentPage = HOME;
+          Serial.println("[UI] display home page");
+          break;
       }
-      return;
     }
   }
 
-  // Skip API calls if WiFi down
-  if (wifiMulti.run() != WL_CONNECTED) return;
-  
-  // Stagger API calls for load distribution
-  if (now - tLock >= LOCK_CHECK_INTERVAL) {
-    tLock = now;
-    checkLock();
-  }else if (now - tState >= STATE_CHECK_INTERVAL) {
-    tState = now;
-    checkState();
-  }else if (now - tPin >= PIN_CHECK_INTERVAL) {
-    tPin = now;
-    checkPin();
-  }
+  // Serial.println("[UI] lcd displaying the needed content");
 
   switch (currentPage) {
     case WELCOME:
       pastTime = millis();
       WelcomePage();
       if(millis() - sys.CheckDelay > 250){
+        sys.CheckDelay = millis();
         currentPage = HOME;
       }
       break;
@@ -239,6 +236,71 @@ void loop() {
       if(millis() - sys.CheckDelay > 1000){
         InputPin = "";
         sys.CheckDelay = millis();
+      }
+      break;
+
+    case UNLOCKED:
+      WebStatusPage("UNLOCKED", true);
+      sys.PageDelay = millis();
+      sys.WebLockDelay = millis();
+      currentPage = HALT;
+      break;
+
+    case LOCKED:
+      WebStatusPage("LOCKED", false);
+      sys.PageDelay = millis();
+      currentPage = HALT;
+      break;
+
+    case DISABLE:
+      PageTemplate("KEYPAD", "DISABLED");
+      currentPage = HOLD_DISABLED;
+      break;
+
+    case HOLD_DISABLED:
+      if(!sys.lock){
+        currentPage = HOME;
+      }
+      break;
+    
+    case HALT:
+      if(!sys.state){
+        if(millis() - sys.PageDelay > 1000){
+        currentPage = HOME;
+        }
+      }
+      break;
+  }
+
+  // Skip API calls if WiFi down
+  if (wifiMulti.run() != WL_CONNECTED) return;
+  
+  // Stagger API calls for load distribution
+  switch (actions) {
+    case STATE:
+      Serial.println("[STATE] Checking the state of the API!");
+      actions = LOCK;
+      if (now - tState >= STATE_CHECK_INTERVAL){
+        checkState();
+        tState = millis();
+      }
+      break;
+
+    case LOCK:
+      Serial.println("[LOCK] Checking the lock state of the API!");
+      actions = PIN;
+      if (now - tLock >= LOCK_CHECK_INTERVAL){
+        checkLock();
+        tLock = millis();
+      }
+      break;
+
+    case PIN:
+      Serial.println("[PIN] Checking the pin state of the API!");
+      actions = STATE;
+      if (now - tPin >= PIN_CHECK_INTERVAL) {
+        checkPin();
+        tPin = millis();
       }
       break;
   }
@@ -277,8 +339,19 @@ void HomePage(){
   lcd.blink();
 }
 
-void SuccessPage(){
+void WebStatusPage(String message, bool state){
   tone(BUZZ, 500, int(3*ScreenDelay/4));
+  noTone(BUZZ);
+  lcd.clear();
+  lcd.noBlink();
+  printCentered("Door", 0);
+  printCentered(message, 1);
+  WebServo.state = state;
+  if (state) sys.WebLockDelay = millis();
+}
+
+void SuccessPage(){
+  tone(BUZZ, 500, int(ScreenDelay));
   noTone(BUZZ);
   lcd.clear();
   lcd.noBlink();
@@ -293,7 +366,33 @@ void SuccessPage(){
   _servo_.interval = DOOR_OPEN_INTERVAL/2;
 }
 
-void updateServo(){
+void updateServoMan(){
+  if(WebServo.state){
+    if(WebServo.position == FULL) return;
+    for(int i=0; i<=180; i+=2){
+    servo.write(i);
+    delay(int((2/180)*(WebServo.interval/2)));
+    };
+    servo.write(180);
+    Serial.println("[ACTION] servo is from 0 -> 180");
+    WebServo.position = FULL;
+  }else{
+    if(WebServo.position == ZERO) return;
+    for(int i=180; i>=0; i-=2){
+      servo.write(i);
+      delay(int((2/180)*(WebServo.interval/2)));
+    };
+    servo.write(0);
+    Serial.println("[ACTION] servo is from 180 -> 0");
+    WebServo.position = ZERO;
+  };
+  if(millis() - sys.WebLockDelay> WEB_SERVO_THRESHOLD){
+    WebServo.state = false;
+    currentPage = HOME;
+  }
+}
+
+void updateServoAuto(){
   if(_servo_.state){
     if(millis() - sys.PageDelay > DOOR_OPEN_INTERVAL/2){
       _servo_.state = !_servo_.state;
@@ -431,7 +530,9 @@ void showLoading() {
 }
 
 void connectWifi() {
-  if (wifiMulti.run() == WL_CONNECTED) return;
+  if (wifiMulti.run() == WL_CONNECTED) {
+    return;
+  }
   
   Serial.print("[WIFI] Connecting");
   WiFi.setHostname("DLIS");
@@ -445,7 +546,7 @@ void connectWifi() {
       return;
     }
     StatPage = once;
-    delay(500);
+    delay(250);
     Serial.print(".");
   }
   
@@ -455,7 +556,11 @@ void connectWifi() {
 }
 
 bool isWifiConnected() {
-  if (wifiMulti.run() == WL_CONNECTED) return true;
+  if (wifiMulti.run() == WL_CONNECTED){
+    StatPage = other;
+    return true;
+  }
+  StatPage = once;
   Serial.println("[WIFI] Disconnected!");
   return false;
 }
@@ -571,9 +676,9 @@ void checkState() {
       Serial.printf("[STATE] %s\n", sys.state ? "ACTIVE" : "INACTIVE");
       
       if (sys.state) {
-        blinkLed(500);
+        currentPage = UNLOCKED;
       }else{
-        blinkLed(100);
+        currentPage = LOCKED;
       }
       
       sys.prevState = sys.state;
@@ -593,7 +698,7 @@ void checkLock() {
       Serial.printf("[LOCK] %s\n", sys.lock ? "LOCKED" : "UNLOCKED");
       
       if (sys.lock) {
-        blinkLed(300);
+        currentPage = DISABLE;
       }
       
       sys.prevLock = sys.lock;
@@ -611,10 +716,7 @@ void checkPin() {
     String newPin = String((const char*)data["pin"]);
     
     if (newPin.length() == 4 && newPin != sys.pin) {
-      Serial.printf("[PIN] Updated: %s\n", newPin.c_str());
-
-      blinkLed(2000);
-      
+      Serial.printf("[PIN] Updated: %s\n", newPin.c_str());      
       sys.pin = newPin;
       prefs.putString("pin", newPin);
     }

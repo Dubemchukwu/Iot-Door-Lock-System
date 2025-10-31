@@ -7,7 +7,7 @@ class TestApiClient:
     """Test API Client for IoT Door System"""
 
     def __init__(self):
-        self._state_ = True
+        self._state_ = False
         self._key_ = "6f9d9614b195f255e7bb3744b92f9486713d9b7eb92edba244bc0f11907ae7c5"
         self.base_route = "DLIS"
         # self.url = "https://iot-door-lock-system.onrender.com/" + self.base_route

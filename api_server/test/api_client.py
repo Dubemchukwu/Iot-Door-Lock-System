@@ -87,7 +87,7 @@ class _TestStateApi_:
     def __init__(self):
         self._key_ = "6f9d9614b195f255e7bb3744b92f9486713d9b7eb92edba244bc0f11907ae7c5"
         self.base_route = "DLIS"
-        self.host = "iot-door-lock-system.onrender.com"
+        self.host = "dubemchukwu.pythonanywhere.com"
         self.port = 443  # HTTPS
         self.state = True
         self.lock = False
@@ -169,7 +169,8 @@ if __name__ == "__main__":
     # TestApiClient()
     stateapi = _TestStateApi_()
     while True:
-        stateapi.PostState()
-        sleep(.15)
+        # stateapi.PostState()
+        stateapi.PostLock()
+        sleep(8.15)
         # stateapi.PostLock()
         # sleep(.15)
