@@ -33,9 +33,9 @@
 #define BUZZ 4
 
 // Important Constants
-#define STATE_CHECK_INTERVAL 128
-#define LOCK_CHECK_INTERVAL 1010
-#define PIN_CHECK_INTERVAL 5003
+#define STATE_CHECK_INTERVAL 79
+#define LOCK_CHECK_INTERVAL 410
+#define PIN_CHECK_INTERVAL 631
 #define WIFI_CHECK_INTERVAL 10000
 #define DOOR_OPEN_INTERVAL 5000
 
@@ -97,7 +97,7 @@ byte RowPins[ROWS] = {R1, R2, R3, R4};
 byte ColPins[COLS] = {C1, C2, C3, C4};
 const int PIN_CURSOR_COL = 6;
 String InputPin = "";
-enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED};
+enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED, HOLD_PROCESSING, HOLD_STATUS, PROCESSING};
 Page currentPage = WELCOME;
 enum WPage { once, other};
 WPage StatPage = other;
@@ -119,6 +119,7 @@ WiFiMulti wifiMulti;
 Servo servo;
 Keypad keypad = Keypad(makeKeymap(keys), RowPins, ColPins, ROWS, COLS);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+TaskHandle_t APICore;
 
 // Function declarations
 void connectWifi();
@@ -164,8 +165,19 @@ void setup() {
   Serial.println("\n[INIT] Door Lock System v1.0");
   Serial.printf("[INIT] Lock: %s\n", sys.lock ? "LOCKED" : "UNLOCKED");
   PageTemplate("System","Starting up");
+
+  Serial.print("Task2 running on core ");
+  Serial.println(xPortGetCoreID());
   
   connectWifi();
+  xTaskCreatePinnedToCore(
+    RunApiTask,
+    "APICore",
+    10000,
+    NULL,
+    1,
+    &APICore,
+    0);
   sys.CheckDelay = millis();
 }
 
@@ -225,17 +237,46 @@ void loop() {
         sys.PageDelay = millis();
         sys.PageBool = true;
         sys.CheckDelay = millis();
-        sys.CheckPassword = true;
         if(CheckPassword(key)){
+          sys.CheckPassword = true;
+        }else{
+          sys.CheckPassword = false;
+        }
+        currentPage = PROCESSING;
+      }
+      break;
+    
+    case PROCESSING:
+      currentPage = HOLD_PROCESSING;
+      sys.CheckDelay = millis();
+      showLoading();
+      break;
+
+    case HOLD_PROCESSING:
+      if(millis() - sys.CheckDelay >= 1100){
+        currentPage = HOLD_STATUS;
+        if(sys.CheckPassword){
           SuccessPage();
         }else{
           ErrorPage();
-          currentPage = HOME;
         }
+        sys.CheckDelay = millis();
       }
-      if(millis() - sys.CheckDelay > 1000){
+      break;
+
+    case HOLD_STATUS:
+      if(sys.CheckPassword){
+        if(millis() - sys.CheckDelay > DOOR_OPEN_INTERVAL){
         InputPin = "";
         sys.CheckDelay = millis();
+        currentPage = HOME;
+      }
+      }else{
+        if(millis() - sys.CheckDelay > DOOR_OPEN_INTERVAL/4){
+        InputPin = "";
+        sys.CheckDelay = millis();
+        currentPage = HOME;
+      }
       }
       break;
 
@@ -274,39 +315,47 @@ void loop() {
 
   // Skip API calls if WiFi down
   if (wifiMulti.run() != WL_CONNECTED) return;
-  
-  // Stagger API calls for load distribution
-  switch (actions) {
-    case STATE:
-      Serial.println("[STATE] Checking the state of the API!");
-      actions = LOCK;
-      if (now - tState >= STATE_CHECK_INTERVAL){
-        checkState();
-        tState = millis();
-      }
-      break;
-
-    case LOCK:
-      Serial.println("[LOCK] Checking the lock state of the API!");
-      actions = PIN;
-      if (now - tLock >= LOCK_CHECK_INTERVAL){
-        checkLock();
-        tLock = millis();
-      }
-      break;
-
-    case PIN:
-      Serial.println("[PIN] Checking the pin state of the API!");
-      actions = STATE;
-      if (now - tPin >= PIN_CHECK_INTERVAL) {
-        checkPin();
-        tPin = millis();
-      }
-      break;
-  }
 
   Serial.flush();
   yield();
+}
+
+void RunApiTask(void * pvParameters){
+  Serial.print("[CORE] API running on core ");
+  Serial.print(xPortGetCoreID());
+  Serial.println(" ...");
+  for(;;){
+    unsigned long now = millis();
+    // Stagger API calls for load distribution
+    switch (actions) {
+      case STATE:
+        // Serial.println("[STATE] Checking the state of the API!");
+        actions = LOCK;
+        if (now - tState >= STATE_CHECK_INTERVAL){
+          checkState();
+          tState = millis();
+        }
+        break;
+
+      case LOCK:
+        // Serial.println("[LOCK] Checking the lock state of the API!");
+        actions = PIN;
+        if (now - tLock >= LOCK_CHECK_INTERVAL){
+          checkLock();
+          tLock = millis();
+        }
+        break;
+
+      case PIN:
+        // Serial.println("[PIN] Checking the pin state of the API!");
+        actions = STATE;
+        if (now - tPin >= PIN_CHECK_INTERVAL) {
+          checkPin();
+          tPin = millis();
+        }
+        break;
+    }
+  }
 }
 
 void printCentered(String text, int row) {
@@ -396,12 +445,14 @@ void updateServoAuto(){
   if(_servo_.state){
     if(millis() - sys.PageDelay > DOOR_OPEN_INTERVAL/2){
       _servo_.state = !_servo_.state;
+      break;
     }
     if(_servo_.position == FULL) return;
     for(int i=0; i<=180; i+=2){
     servo.write(i);
     delay(int((2/180)*(_servo_.interval/2)));
     };
+    servo.write(180);
     Serial.println("[ACTION] servo is from 0 -> 180");
     _servo_.position = FULL;
   }else{
@@ -410,14 +461,15 @@ void updateServoAuto(){
       servo.write(i);
       delay(int((2/180)*(_servo_.interval/2)));
     };
+    servo.write(0);
     Serial.println("[ACTION] servo is from 180 -> 0");
     _servo_.position = ZERO;
   };
 
-  if(sys.PageBool && millis() - sys.PageDelay > DOOR_OPEN_INTERVAL){
-    sys.PageBool = false;
-    currentPage = HOME;
-  }
+  // if(sys.PageBool && millis() - sys.PageDelay > DOOR_OPEN_INTERVAL){
+  //   sys.PageBool = false;
+  //   currentPage = HOME;
+  // }
 }
 
 void ErrorPage(){
@@ -514,18 +566,10 @@ void showLoading() {
   printCentered("Processing", 0);
   
   char loadChars[] = {'|', '/', '-', '\\'};
-  // something has to count to 11
-  {
-    if(millis() - sys.LoadTime >= 150){
-      if(sys.LoadCtrl >= 11){
-        sys.LoadCtrl = 0;
-        return;
-      }
-      lcd.setCursor(7, 1);
-      lcd.print(loadChars[sys.LoadCtrl % 4]);
-      sys.LoadCtrl++;
-      sys.LoadTime = millis();
-    }
+  for (int i = 0; i < 12; i++) {
+    lcd.setCursor(7, 1);
+    lcd.print(loadChars[i % 4]);
+    delay(170);
   }
 }
 
