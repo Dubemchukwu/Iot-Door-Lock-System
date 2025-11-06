@@ -6,12 +6,15 @@
 #include <ESP32Servo.h>
 #include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
+#include "esp_task_wdt.h"
 
 // Configuration
-#define SSID_PRIMARY "Dubem's Phone"
-#define PSWD_PRIMARY "password7"
-#define SSID_SECONDARY "THATDUBEMGUY"
-#define PSWD_SECONDARY "thatdubemguy."
+#define SSID_PRIMARY "THATDUBEMGUY"
+#define PSWD_PRIMARY "thatdubemguy."
+#define SSID_SECONDARY "Dubem's Phone"
+#define PSWD_SECONDARY "password7"
+#define SSID_TERTIARY "Dubem's Phone"
+#define PSWD_TERTIARY "12345678"
 // #define HOST "iot-door-lock-system.onrender.com"
 #define HOST "dubemchukwu.pythonanywhere.com"
 #define PORT 443
@@ -120,6 +123,11 @@ Servo servo;
 Keypad keypad = Keypad(makeKeymap(keys), RowPins, ColPins, ROWS, COLS);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 TaskHandle_t APICore;
+const esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 30000,
+    .idle_core_mask = (1 << 0),
+    .trigger_panic = true,
+  };
 
 // Function declarations
 void connectWifi();
@@ -144,6 +152,7 @@ void PageTemplate(String FirstText, String SecondText);
 
 void setup() {
   Serial.begin(115200);
+  esp_task_wdt_init(&wdt_config);
   pinMode(LED_PIN, OUTPUT);
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
@@ -166,9 +175,10 @@ void setup() {
   Serial.printf("[INIT] Lock: %s\n", sys.lock ? "LOCKED" : "UNLOCKED");
   PageTemplate("System","Starting up");
 
-  Serial.print("Task2 running on core ");
-  Serial.println(xPortGetCoreID());
-  
+  Serial.print("[CORE] MANUAL running on core ");
+  Serial.print(xPortGetCoreID());
+  Serial.println(" ...");
+
   connectWifi();
   xTaskCreatePinnedToCore(
     RunApiTask,
@@ -177,7 +187,7 @@ void setup() {
     NULL,
     1,
     &APICore,
-    0);
+    1);
   sys.CheckDelay = millis();
 }
 
@@ -208,8 +218,10 @@ void loop() {
     }
   }
 
-  // Serial.println("[UI] lcd displaying the needed content");
+  // Skip API calls if WiFi down
+  if (wifiMulti.run() != WL_CONNECTED) return;
 
+  // Serial.println("[UI] lcd displaying the needed content");
   switch (currentPage) {
     case WELCOME:
       pastTime = millis();
@@ -234,7 +246,6 @@ void loop() {
         lcd.print("****"); // Show asterisk for security
         Serial.println(InputPin);
 
-        sys.PageDelay = millis();
         sys.PageBool = true;
         sys.CheckDelay = millis();
         if(CheckPassword(key)){
@@ -256,6 +267,7 @@ void loop() {
       if(millis() - sys.CheckDelay >= 1100){
         currentPage = HOLD_STATUS;
         if(sys.CheckPassword){
+          sys.PageDelay = millis();
           SuccessPage();
         }else{
           ErrorPage();
@@ -313,48 +325,56 @@ void loop() {
       break;
   }
 
-  // Skip API calls if WiFi down
-  if (wifiMulti.run() != WL_CONNECTED) return;
-
   Serial.flush();
   yield();
 }
 
 void RunApiTask(void * pvParameters){
+  // esp_task_wdt_delete(NULL);
   Serial.print("[CORE] API running on core ");
   Serial.print(xPortGetCoreID());
   Serial.println(" ...");
   for(;;){
+
+    // esp_task_wdt_reset();
     unsigned long now = millis();
     // Stagger API calls for load distribution
-    switch (actions) {
-      case STATE:
-        // Serial.println("[STATE] Checking the state of the API!");
-        actions = LOCK;
-        if (now - tState >= STATE_CHECK_INTERVAL){
-          checkState();
-          tState = millis();
-        }
-        break;
-
-      case LOCK:
-        // Serial.println("[LOCK] Checking the lock state of the API!");
-        actions = PIN;
-        if (now - tLock >= LOCK_CHECK_INTERVAL){
-          checkLock();
-          tLock = millis();
-        }
-        break;
-
-      case PIN:
-        // Serial.println("[PIN] Checking the pin state of the API!");
-        actions = STATE;
-        if (now - tPin >= PIN_CHECK_INTERVAL) {
-          checkPin();
-          tPin = millis();
-        }
-        break;
+    if (WiFi.status() != WL_CONNECTED || wifiMulti.run() != WL_CONNECTED) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
     }
+
+    switch (actions) {
+    case STATE:
+      // Serial.println("[STATE] Checking the state of the API!");
+      actions = LOCK;
+      if (now - tState >= STATE_CHECK_INTERVAL){
+        checkState();
+        tState = millis();
+      }
+      break;
+
+    case LOCK:
+      // Serial.println("[LOCK] Checking the lock state of the API!");
+      actions = PIN;
+      if (now - tLock >= LOCK_CHECK_INTERVAL){
+        checkLock();
+        tLock = millis();
+      }
+      break;
+
+    case PIN:
+      // Serial.println("[PIN] Checking the pin state of the API!");
+      actions = STATE;
+      if (now - tPin >= PIN_CHECK_INTERVAL) {
+        checkPin();
+        tPin = millis();
+      }
+      break;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(250));
+    yield();
   }
 }
 
@@ -445,7 +465,6 @@ void updateServoAuto(){
   if(_servo_.state){
     if(millis() - sys.PageDelay > DOOR_OPEN_INTERVAL/2){
       _servo_.state = !_servo_.state;
-      break;
     }
     if(_servo_.position == FULL) return;
     for(int i=0; i<=180; i+=2){
@@ -569,7 +588,7 @@ void showLoading() {
   for (int i = 0; i < 12; i++) {
     lcd.setCursor(7, 1);
     lcd.print(loadChars[i % 4]);
-    delay(170);
+    delay(100);
   }
 }
 
@@ -582,6 +601,7 @@ void connectWifi() {
   WiFi.setHostname("DLIS");
   wifiMulti.addAP(SSID_PRIMARY, PSWD_PRIMARY);
   wifiMulti.addAP(SSID_SECONDARY, PSWD_SECONDARY);
+  wifiMulti.addAP(SSID_TERTIARY, PSWD_TERTIARY);
   
   unsigned long start = millis();
   while (wifiMulti.run() != WL_CONNECTED) {
@@ -590,8 +610,11 @@ void connectWifi() {
       return;
     }
     StatPage = once;
-    delay(250);
+    // esp_task_wdt_reset();
+    vTaskDelay(pdMS_TO_TICKS(250));
+    // delay(250);
     Serial.print(".");
+    yield();
   }
   
   Serial.printf("\n[WIFI] Connected: %s\n", WiFi.SSID().c_str());
@@ -638,6 +661,7 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
       sys.WatchingAPI = !sys.WatchingAPI;
     }
     delete client;
+    yield();
     return false;
   }
 
@@ -658,10 +682,13 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
   while (!client->available()) {
     if (millis() - timeout > HTTP_TIMEOUT) {
       client->stop();
+      yield();
       delete client;
       return false;
     }
+    // esp_task_wdt_reset();
     yield();
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 
   // Serial.println("[HTTPS] Reading response:");
@@ -683,6 +710,8 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
     }
     
     if (inBody) body += line;
+    // esp_task_wdt_reset();
+    yield();
   }
 
   int jsonStart = body.indexOf('{');          
@@ -696,6 +725,8 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
     Serial.println("JSON not found in response");
   }
 
+  yield();
+  vTaskDelay(pdMS_TO_TICKS(10));
   client->stop();
   delete client;
   
@@ -711,31 +742,30 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
 void checkState() {
   JSONVar data;
   
-  if (!apiGet("/DLIS/state", data)) return;
-  
-  if (data.hasOwnProperty("state")) {
+  if(apiGet("/DLIS/state", data)){
+    if (data.hasOwnProperty("state")) {
     sys.state = (bool)data["state"];
     
-    if (sys.state != sys.prevState) {
-      Serial.printf("[STATE] %s\n", sys.state ? "ACTIVE" : "INACTIVE");
-      
-      if (sys.state) {
-        currentPage = UNLOCKED;
-      }else{
-        currentPage = LOCKED;
+      if (sys.state != sys.prevState) {
+        Serial.printf("[STATE] %s\n", sys.state ? "ACTIVE" : "INACTIVE");
+        
+        if (sys.state) {
+          currentPage = UNLOCKED;
+        }else{
+          currentPage = LOCKED;
+        }
+        
+        sys.prevState = sys.state;
       }
-      
-      sys.prevState = sys.state;
     }
-  }
+  };
 }
 
 void checkLock() {
   JSONVar data;
   
-  if (!apiGet("/DLIS/lock", data)) return;
-  
-  if (data.hasOwnProperty("lock")) {
+  if(apiGet("/DLIS/lock", data)){
+    if (data.hasOwnProperty("lock")) {
     sys.lock = (bool)data["lock"];
     
     if (sys.lock != sys.prevLock) {
@@ -749,20 +779,21 @@ void checkLock() {
       prefs.putBool("lock", sys.lock);
     }
   }
+  };
 }
 
 void checkPin() {
   JSONVar data;
   
-  if (!apiGet("/DLIS/pin", data)) return;
-  
-  if (data.hasOwnProperty("pin")) {
+  if(apiGet("/DLIS/pin", data)){
+    if (data.hasOwnProperty("pin")) {
     String newPin = String((const char*)data["pin"]);
     
-    if (newPin.length() == 4 && newPin != sys.pin) {
-      Serial.printf("[PIN] Updated: %s\n", newPin.c_str());      
-      sys.pin = newPin;
-      prefs.putString("pin", newPin);
+      if (newPin.length() == 4 && newPin != sys.pin) {
+        Serial.printf("[PIN] Updated: %s\n", newPin.c_str());      
+        sys.pin = newPin;
+        prefs.putString("pin", newPin);
+      }
     }
-  }
+  };
 }

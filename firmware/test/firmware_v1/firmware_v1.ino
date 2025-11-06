@@ -12,7 +12,8 @@
 #define PSWD_PRIMARY "password7"
 #define SSID_SECONDARY "THATDUBEMGUY"
 #define PSWD_SECONDARY "thatdubemguy."
-#define HOST "iot-door-lock-system.onrender.com"
+// #define HOST "iot-door-lock-system.onrender.com"
+#define HOST "dubemchukwu.pythonanywhere.com"
 #define PORT 443
 #define LED_PIN 2
 #define HASH "6f9d9614b195f255e7bb3744b92f9486713d9b7eb92edba244bc0f11907ae7c5"
@@ -31,15 +32,17 @@
 #define COLS 4
 #define BUZZ 4
 
-// Optimized polling intervals
-#define STATE_CHECK_INTERVAL 500
-#define LOCK_CHECK_INTERVAL 2000
-#define PIN_CHECK_INTERVAL 10000
+// Important Constants
+#define STATE_CHECK_INTERVAL 79
+#define LOCK_CHECK_INTERVAL 410
+#define PIN_CHECK_INTERVAL 631
 #define WIFI_CHECK_INTERVAL 10000
+#define DOOR_OPEN_INTERVAL 5000
 
 // Connection timeouts
-#define HTTP_TIMEOUT 3000
+#define HTTP_TIMEOUT 750
 #define WIFI_CONNECT_TIMEOUT 10000
+#define WEB_SERVO_THRESHOLD 10000
 
 // System state
 struct {
@@ -51,7 +54,11 @@ struct {
   int LoadCtrl = 0;
   unsigned long LoadTime = millis();
   unsigned long CheckDelay = millis();
+  unsigned long PageDelay = millis();
+  unsigned long WebLockDelay = millis();
   bool CheckPassword = false;
+  bool WatchingAPI = false;
+  bool PageBool = false;
 } sys;
 
 // Timing
@@ -67,6 +74,17 @@ struct {
   uint16_t interval = 0;
 } led;
 
+// Servo Controller
+enum ServoPosition {ZERO, HALF, FULL};
+struct _SERVO_ {
+  bool state = false;
+  uint16_t interval = 0;
+  ServoPosition position = ZERO;
+};
+
+_SERVO_ _servo_;
+_SERVO_ WebServo;
+
 // variables
 char keys[ROWS][COLS] = {
   {'1', '2', '3', 'A'},
@@ -79,10 +97,12 @@ byte RowPins[ROWS] = {R1, R2, R3, R4};
 byte ColPins[COLS] = {C1, C2, C3, C4};
 const int PIN_CURSOR_COL = 6;
 String InputPin = "";
-enum Page { WELCOME, HOME, RUNNING, RESPONSE};
+enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED, HOLD_PROCESSING, HOLD_STATUS, PROCESSING};
 Page currentPage = WELCOME;
 enum WPage { once, other};
 WPage StatPage = other;
+enum Actions {STATE, LOCK, PIN};
+Actions actions = STATE;
 unsigned long lastUpdate = 0;
 int animFrame = 0;
 long duration;
@@ -99,12 +119,14 @@ WiFiMulti wifiMulti;
 Servo servo;
 Keypad keypad = Keypad(makeKeymap(keys), RowPins, ColPins, ROWS, COLS);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+TaskHandle_t APICore;
 
 // Function declarations
 void connectWifi();
 bool isWifiConnected();
 void blinkLed(uint16_t duration);
 void updateLed();
+void updateServo();
 bool apiGet(const char* endpoint, JSONVar& response);
 void checkState();
 void checkLock();
@@ -119,6 +141,7 @@ void printCentered();
 void HandleInput();
 bool CheckPassword(String Password);
 void PageTemplate(String FirstText, String SecondText);
+void WiFiEvent(WiFiEvent_t event);
 
 void setup() {
   Serial.begin(115200);
@@ -143,61 +166,61 @@ void setup() {
   Serial.println("\n[INIT] Door Lock System v1.0");
   Serial.printf("[INIT] Lock: %s\n", sys.lock ? "LOCKED" : "UNLOCKED");
   PageTemplate("System","Starting up");
-  
+
+  Serial.print("[CORE] MANUAL running on core ");
+  Serial.print(xPortGetCoreID());
+  Serial.println(" ...");
+
+  WiFi.onEvent(WiFiEvent);
   connectWifi();
+  xTaskCreatePinnedToCore(
+    RunApiTask,
+    "APICore",
+    10000,
+    NULL,
+    1,
+    &APICore,
+    0);
   sys.CheckDelay = millis();
 }
 
 void loop() {
   unsigned long now = millis();
-  
   // Non blocking functions
   updateLed();
+  updateServoAuto();
+  updateServoMan();
   
   // Check WiFi periodically
   if (now - tWifi >= WIFI_CHECK_INTERVAL) {
     tWifi = now;
     if (!isWifiConnected()) {
-      connectWifi();
+      Serial.println("[WIFI] Wifi - Not Connected");
       switch(StatPage){
         case once:
           WifiPage();
+          // connectWifi();
           StatPage = other;
-          Serial.println("Wifi - Not Connected");
+          currentPage = HOME;
           break;
         case other:
+          currentPage = HOME;
+          Serial.println("[UI] display home page");
           break;
       }
-      return;
-    }else{
-      StatPage = other;
     }
   }
 
   // Skip API calls if WiFi down
   if (wifiMulti.run() != WL_CONNECTED) return;
-  
-  // Stagger API calls for load distribution
-  if (now - tLock >= LOCK_CHECK_INTERVAL) {
-    tLock = now;
-    checkLock();
-  }
-  
-  if (now - tState >= STATE_CHECK_INTERVAL) {
-    tState = now;
-    checkState();
-  }
 
-  if (now - tPin >= PIN_CHECK_INTERVAL) {
-    tPin = now;
-    checkPin();
-  }
-
+  // Serial.println("[UI] lcd displaying the needed content");
   switch (currentPage) {
     case WELCOME:
       pastTime = millis();
       WelcomePage();
       if(millis() - sys.CheckDelay > 250){
+        sys.CheckDelay = millis();
         currentPage = HOME;
       }
       break;
@@ -206,7 +229,7 @@ void loop() {
       HomePage();
       currentPage = RUNNING;
       InputPin = "";
-      Serial.println("Ready for PIN input");
+      Serial.println("[MANUAL] Ready for PIN input");
       break;
       
     case RUNNING:
@@ -216,24 +239,154 @@ void loop() {
         lcd.print("****"); // Show asterisk for security
         Serial.println(InputPin);
 
+        sys.PageBool = true;
         sys.CheckDelay = millis();
-        sys.CheckPassword = true;
         if(CheckPassword(key)){
+          sys.CheckPassword = true;
+        }else{
+          sys.CheckPassword = false;
+        }
+        currentPage = PROCESSING;
+      }
+      break;
+    
+    case PROCESSING:
+      currentPage = HOLD_PROCESSING;
+      sys.CheckDelay = millis();
+      showLoading();
+      break;
+
+    case HOLD_PROCESSING:
+      if(millis() - sys.CheckDelay >= 1100){
+        currentPage = HOLD_STATUS;
+        if(sys.CheckPassword){
+          sys.PageDelay = millis();
           SuccessPage();
         }else{
           ErrorPage();
         }
-        currentPage = HOME;
+        sys.CheckDelay = millis();
       }
-      if(millis() - sys.CheckDelay > 1000){
+      break;
+
+    case HOLD_STATUS:
+      if(sys.CheckPassword){
+        if(millis() - sys.CheckDelay > DOOR_OPEN_INTERVAL){
         InputPin = "";
         sys.CheckDelay = millis();
+        currentPage = HOME;
+      }
+      }else{
+        if(millis() - sys.CheckDelay > DOOR_OPEN_INTERVAL/4){
+        InputPin = "";
+        sys.CheckDelay = millis();
+        currentPage = HOME;
+      }
+      }
+      break;
+
+    case UNLOCKED:
+      WebStatusPage("UNLOCKED", true);
+      sys.PageDelay = millis();
+      sys.WebLockDelay = millis();
+      currentPage = HALT;
+      break;
+
+    case LOCKED:
+      WebStatusPage("LOCKED", false);
+      sys.PageDelay = millis();
+      currentPage = HALT;
+      break;
+
+    case DISABLE:
+      PageTemplate("KEYPAD", "DISABLED");
+      currentPage = HOLD_DISABLED;
+      break;
+
+    case HOLD_DISABLED:
+      if(!sys.lock){
+        currentPage = HOME;
+      }
+      break;
+    
+    case HALT:
+      if(!sys.state){
+        if(millis() - sys.PageDelay > 1000){
+        currentPage = HOME;
+        }
       }
       break;
   }
 
   Serial.flush();
   yield();
+}
+
+void WiFiEvent(WiFiEvent_t event){
+  switch(event){
+    case ARDUINO_EVENT_WIFI_STA_START:
+      Serial.println("[WIFI] Station started");
+      break;
+      
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.printf("\n[WIFI] Connected: %s\n", WiFi.SSID().c_str());
+      break;
+
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      Serial.printf("[WIFI] IP: %s | RSSI: %d dBm\n", 
+                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      break;
+
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      // Serial.println("[WiFi] Disconnected.");
+      Serial.println("[WIFI] Reconnecting...");
+      connectWifi();
+      break;
+
+    default:
+      break;
+  }
+}
+
+void RunApiTask(void * pvParameters){
+  Serial.print("[CORE] API running on core ");
+  Serial.print(xPortGetCoreID());
+  Serial.println(" ...");
+  for(;;){
+    unsigned long now = millis();
+    // Stagger API calls for load distribution
+    if (wifiMulti.run() != WL_CONNECTED) continue;
+    
+    switch (actions) {
+      case STATE:
+        // Serial.println("[STATE] Checking the state of the API!");
+        actions = LOCK;
+        if (now - tState >= STATE_CHECK_INTERVAL){
+          checkState();
+          tState = millis();
+        }
+        break;
+
+      case LOCK:
+        // Serial.println("[LOCK] Checking the lock state of the API!");
+        actions = PIN;
+        if (now - tLock >= LOCK_CHECK_INTERVAL){
+          checkLock();
+          tLock = millis();
+        }
+        break;
+
+      case PIN:
+        // Serial.println("[PIN] Checking the pin state of the API!");
+        actions = STATE;
+        if (now - tPin >= PIN_CHECK_INTERVAL) {
+          checkPin();
+          tPin = millis();
+        }
+        break;
+    }
+    yield();
+  }
 }
 
 void printCentered(String text, int row) {
@@ -266,8 +419,19 @@ void HomePage(){
   lcd.blink();
 }
 
-void SuccessPage(){
+void WebStatusPage(String message, bool state){
   tone(BUZZ, 500, int(3*ScreenDelay/4));
+  noTone(BUZZ);
+  lcd.clear();
+  lcd.noBlink();
+  printCentered("Door", 0);
+  printCentered(message, 1);
+  WebServo.state = state;
+  if (state) sys.WebLockDelay = millis();
+}
+
+void SuccessPage(){
+  tone(BUZZ, 500, int(ScreenDelay));
   noTone(BUZZ);
   lcd.clear();
   lcd.noBlink();
@@ -277,7 +441,65 @@ void SuccessPage(){
   lcd.print("SuccessFully");
   // HandleDoorLock();
   // delay(ScreenDelay);
-  servo.write(180);
+  // servo.write(180);
+  _servo_.state = true;
+  _servo_.interval = DOOR_OPEN_INTERVAL/2;
+}
+
+void updateServoMan(){
+  if(WebServo.state){
+    if(WebServo.position == FULL) return;
+    for(int i=0; i<=180; i+=2){
+    servo.write(i);
+    delay(int((2/180)*(WebServo.interval/2)));
+    };
+    servo.write(180);
+    Serial.println("[ACTION] servo is from 0 -> 180");
+    WebServo.position = FULL;
+  }else{
+    if(WebServo.position == ZERO) return;
+    for(int i=180; i>=0; i-=2){
+      servo.write(i);
+      delay(int((2/180)*(WebServo.interval/2)));
+    };
+    servo.write(0);
+    Serial.println("[ACTION] servo is from 180 -> 0");
+    WebServo.position = ZERO;
+  };
+  if(millis() - sys.WebLockDelay> WEB_SERVO_THRESHOLD){
+    WebServo.state = false;
+    currentPage = HOME;
+  }
+}
+
+void updateServoAuto(){
+  if(_servo_.state){
+    if(millis() - sys.PageDelay > DOOR_OPEN_INTERVAL/2){
+      _servo_.state = !_servo_.state;
+    }
+    if(_servo_.position == FULL) return;
+    for(int i=0; i<=180; i+=2){
+    servo.write(i);
+    delay(int((2/180)*(_servo_.interval/2)));
+    };
+    servo.write(180);
+    Serial.println("[ACTION] servo is from 0 -> 180");
+    _servo_.position = FULL;
+  }else{
+    if(_servo_.position == ZERO) return;
+    for(int i=180; i>=0; i-=2){
+      servo.write(i);
+      delay(int((2/180)*(_servo_.interval/2)));
+    };
+    servo.write(0);
+    Serial.println("[ACTION] servo is from 180 -> 0");
+    _servo_.position = ZERO;
+  };
+
+  // if(sys.PageBool && millis() - sys.PageDelay > DOOR_OPEN_INTERVAL){
+  //   sys.PageBool = false;
+  //   currentPage = HOME;
+  // }
 }
 
 void ErrorPage(){
@@ -305,7 +527,7 @@ void WelcomePage(){
   lcd.clear();
   lcd.noCursor();
   lcd.noBlink();
-  slideText("Welcome", 0, 4, 40);
+  printCentered("Welcome", 0);
 }
 
 int getDist(){
@@ -374,47 +596,48 @@ void showLoading() {
   printCentered("Processing", 0);
   
   char loadChars[] = {'|', '/', '-', '\\'};
-  // something has to count to 11
-  {
-    if(millis() - sys.LoadTime >= 150){
-      if(sys.LoadCtrl >= 11){
-        sys.LoadCtrl = 0;
-        return;
-      }
-      lcd.setCursor(7, 1);
-      lcd.print(loadChars[sys.LoadCtrl % 4]);
-      sys.LoadCtrl++;
-      sys.LoadTime = millis();
-    }
+  for (int i = 0; i < 12; i++) {
+    lcd.setCursor(7, 1);
+    lcd.print(loadChars[i % 4]);
+    delay(170);
   }
 }
 
 void connectWifi() {
-  if (wifiMulti.run() == WL_CONNECTED) return;
+  if (wifiMulti.run() == WL_CONNECTED) {
+    return;
+  }
   
   Serial.print("[WIFI] Connecting");
   WiFi.setHostname("DLIS");
   wifiMulti.addAP(SSID_PRIMARY, PSWD_PRIMARY);
   wifiMulti.addAP(SSID_SECONDARY, PSWD_SECONDARY);
+
+  wifiMulti.run(WIFI_CONNECT_TIMEOUT/30, false);
   
-  unsigned long start = millis();
-  while (wifiMulti.run() != WL_CONNECTED) {
-    if (millis() - start >= WIFI_CONNECT_TIMEOUT) {
-      Serial.println("\n[WIFI] Timeout!");
-      return;
-    }
-    StatPage = once;
-    delay(500);
-    Serial.print(".");
-  }
+  // unsigned long start = millis();
+  // while (wifiMulti.run() != WL_CONNECTED) {
+  //   if (millis() - start >= WIFI_CONNECT_TIMEOUT) {
+  //     Serial.println("\n[WIFI] Timeout!");
+  //     return;
+  //   }
+  //   StatPage = once;
+  //   delay(250);
+  //   Serial.print(".");
+  // }
+  Serial.println("...");
   
-  Serial.printf("\n[WIFI] Connected: %s\n", WiFi.SSID().c_str());
-  Serial.printf("[WIFI] IP: %s | RSSI: %d dBm\n", 
-                WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  // Serial.printf("\n[WIFI] Connected: %s\n", WiFi.SSID().c_str());
+  // Serial.printf("[WIFI] IP: %s | RSSI: %d dBm\n", 
+  //               WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
 bool isWifiConnected() {
-  if (wifiMulti.run() == WL_CONNECTED) return true;
+  if (wifiMulti.run() == WL_CONNECTED){
+    StatPage = other;
+    return true;
+  }
+  StatPage = once;
   Serial.println("[WIFI] Disconnected!");
   return false;
 }
@@ -443,7 +666,10 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
   
   // Connect with timeout
   if (!client->connect(HOST, PORT)) {
-    Serial.printf("✓ Connecting to %s:%d\n", HOST, PORT);
+    if(!sys.WatchingAPI){
+      Serial.printf("✓ Connecting to %s:%d\n", HOST, PORT);
+      sys.WatchingAPI = !sys.WatchingAPI;
+    }
     delete client;
     return false;
   }
@@ -511,6 +737,7 @@ bool apiGet(const char* endpoint, JSONVar& payload) {
     return false;
   }
   payload = JSON.parse(json);
+  sys.WatchingAPI = !sys.WatchingAPI;
   return JSON.typeof(payload) != "undefined";
 }
 
@@ -526,9 +753,9 @@ void checkState() {
       Serial.printf("[STATE] %s\n", sys.state ? "ACTIVE" : "INACTIVE");
       
       if (sys.state) {
-        blinkLed(500);
+        currentPage = UNLOCKED;
       }else{
-        blinkLed(100);
+        currentPage = LOCKED;
       }
       
       sys.prevState = sys.state;
@@ -548,7 +775,7 @@ void checkLock() {
       Serial.printf("[LOCK] %s\n", sys.lock ? "LOCKED" : "UNLOCKED");
       
       if (sys.lock) {
-        blinkLed(300);
+        currentPage = DISABLE;
       }
       
       sys.prevLock = sys.lock;
@@ -566,10 +793,7 @@ void checkPin() {
     String newPin = String((const char*)data["pin"]);
     
     if (newPin.length() == 4 && newPin != sys.pin) {
-      Serial.printf("[PIN] Updated: %s\n", newPin.c_str());
-
-      blinkLed(2000);
-      
+      Serial.printf("[PIN] Updated: %s\n", newPin.c_str());      
       sys.pin = newPin;
       prefs.putString("pin", newPin);
     }
