@@ -99,7 +99,7 @@ byte RowPins[ROWS] = {R1, R2, R3, R4};
 byte ColPins[COLS] = {C1, C2, C3};
 const int PIN_CURSOR_COL = 6;
 String InputPin = "";
-enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED, HOLD_PROCESSING, HOLD_STATUS, PROCESSING};
+enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED, HOLD_PROCESSING, HOLD_STATUS, PROCESSING, PIN_UI, PIN_CHANGED};
 Page currentPage = WELCOME;
 enum WPage { once, other};
 WPage StatPage = other;
@@ -329,16 +329,17 @@ void loop() {
       }
       break;
 
-    case PIN:
+    case PIN_UI:
       PageTemplate("Pin Changed", "Successfully");
       currentPage = PIN_CHANGED;
       sys.PageDelay = millis();
       break;
 
     case PIN_CHANGED:
-      if(millis() - sys.PageDelay > 1000){
+      if(millis() - sys.PageDelay > 2000){
         currentPage = HOME;
         sys.PageDelay = millis();
+        // Serial.println("[Debug] Testing Pin UI.");
       }
       break;
     
@@ -657,6 +658,7 @@ bool isWifiConnected() {
     return true;
   }
   StatPage = once;
+  WiFi.disconnect(false);
   Serial.println("[WIFI] Disconnected!");
   return false;
 }
@@ -819,6 +821,7 @@ void checkPin() {
     String newPin = String((const char*)data["pin"]);
     
       if (newPin.length() == 4 && newPin != sys.pin) {
+        currentPage = PIN_UI;
         Serial.printf("[PIN] Updated: %s\n", newPin.c_str());      
         sys.pin = newPin;
         prefs.putString("pin", newPin);
