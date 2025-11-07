@@ -30,9 +30,8 @@
 #define C1 26
 #define C2 25
 #define C3 33
-#define C4 32
 #define ROWS 4
-#define COLS 4
+#define COLS 3
 #define BUZZ 4
 
 // Important Constants
@@ -90,14 +89,14 @@ _SERVO_ WebServo;
 
 // variables
 char keys[ROWS][COLS] = {
-  {'1', '2', '3', 'A'},
-  {'4', '5', '6', 'B'},
-  {'7', '8', '9', 'C'},
-  {'*', '0', '#', 'D'},
+  { '1', '2', '3'},
+  { '4', '5', '6'},
+  { '7', '8', '9'},
+  { '*', '0', '#'}
 };
 
 byte RowPins[ROWS] = {R1, R2, R3, R4};
-byte ColPins[COLS] = {C1, C2, C3, C4};
+byte ColPins[COLS] = {C1, C2, C3};
 const int PIN_CURSOR_COL = 6;
 String InputPin = "";
 enum Page { WELCOME, HOME, RUNNING, HALT, UNLOCKED, LOCKED, DISABLE, HOLD_DISABLED, HOLD_PROCESSING, HOLD_STATUS, PROCESSING};
@@ -193,6 +192,7 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+  char key;
   // Non blocking functions
   updateLed();
   updateServoAuto();
@@ -226,7 +226,7 @@ void loop() {
     case WELCOME:
       pastTime = millis();
       WelcomePage();
-      if(millis() - sys.CheckDelay > 250){
+      if(millis() - sys.CheckDelay > 1000){
         sys.CheckDelay = millis();
         currentPage = HOME;
       }
@@ -240,20 +240,33 @@ void loop() {
       break;
       
     case RUNNING:
+      key = keypad.getKey();
+
+      if(key){
+        if (key == '#'){
+          AdjCol = 6;
+          sys.PageBool = true;
+          sys.CheckDelay = millis();
+          if(CheckPassword(InputPin)){
+            sys.CheckPassword = true;
+          }else{
+            sys.CheckPassword = false;
+          }
+          currentPage = PROCESSING;
+
+        }else if (key == '*'){
+          BackSpace();
+        }else{
+          InputPin += String(key);
+          HandleInput(key);
+        };
+      }
+
       if (Serial.available()) {
         String key = Serial.readString();
         InputPin = key;
         lcd.print("****"); // Show asterisk for security
         Serial.println(InputPin);
-
-        sys.PageBool = true;
-        sys.CheckDelay = millis();
-        if(CheckPassword(key)){
-          sys.CheckPassword = true;
-        }else{
-          sys.CheckPassword = false;
-        }
-        currentPage = PROCESSING;
       }
       break;
     
@@ -315,11 +328,25 @@ void loop() {
         currentPage = HOME;
       }
       break;
+
+    case PIN:
+      PageTemplate("Pin Changed", "Successfully");
+      currentPage = PIN_CHANGED;
+      sys.PageDelay = millis();
+      break;
+
+    case PIN_CHANGED:
+      if(millis() - sys.PageDelay > 1000){
+        currentPage = HOME;
+        sys.PageDelay = millis();
+      }
+      break;
     
     case HALT:
       if(!sys.state){
         if(millis() - sys.PageDelay > 1000){
         currentPage = HOME;
+        sys.PageDelay = millis();
         }
       }
       break;
@@ -547,10 +574,11 @@ void BackSpace(){
   lcd.noBlink();
   int Amt = AdjCol - 7;
   String TempStr = InputPin;
-  String Spacer;
+  String Spacer, PlaceHolder;
   InputPin = "";
   for(int i=0; i<Amt; i++){
     InputPin += TempStr[i];
+    PlaceHolder += "-";
   }
   lcd.setCursor(6, 1);
   for(int a=0; a<=Amt; a++){
@@ -558,7 +586,8 @@ void BackSpace(){
   }
   lcd.print(Spacer);
   lcd.setCursor(6, 1);
-  lcd.print(InputPin);
+  lcd.print(PlaceHolder);
+  // lcd.print(InputPin);
   if (AdjCol > 6){
     AdjCol --;
   };
