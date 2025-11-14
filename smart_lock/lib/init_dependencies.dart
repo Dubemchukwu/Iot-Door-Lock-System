@@ -1,0 +1,26 @@
+import 'package:dio/dio.dart';
+import 'package:get_it/get_it.dart';
+import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
+import 'package:smart_lock/core/api/api_endpoints.dart';
+import 'package:smart_lock/core/api/dio_interceptor.dart';
+import 'package:smart_lock/core/network/connection.dart';
+import 'package:smart_lock/features/control/data/dataSources/control_remote_data_source.dart';
+import 'package:smart_lock/features/control/data/repository/control_repository_impl.dart';
+import 'package:smart_lock/features/control/domain/repository/control_repository.dart';
+import 'package:smart_lock/features/control/domain/useCases/get_manual_control_state.dart';
+import 'package:smart_lock/features/control/domain/useCases/toggle_manual_control.dart';
+import 'package:smart_lock/features/control/presentation/bloc/control_bloc.dart';
+import 'package:smart_lock/features/door/data/dataSources/door_remote_data_source.dart';
+import 'package:smart_lock/features/door/data/repository/door_repository_impl.dart';
+import 'package:smart_lock/features/door/domain/repository/door_repository.dart';
+import 'package:smart_lock/features/door/domain/useCases/get_door_state.dart';
+import 'package:smart_lock/features/door/domain/useCases/update_door_state.dart';
+import 'package:smart_lock/features/door/presentation/bloc/door_bloc.dart';
+import 'package:smart_lock/features/pin/data/dataSources/pin_remote_data_source.dart';
+import 'package:smart_lock/features/pin/data/repository/pin_repository_impl.dart';
+import 'package:smart_lock/features/pin/domain/repository/pin_repository.dart';
+import 'package:smart_lock/features/pin/domain/useCases/get_lock_pin.dart';
+import 'package:smart_lock/features/pin/domain/useCases/update_lock_pin.dart';
+import 'package:smart_lock/features/pin/presentation/bloc/pin_bloc.dart';
+
+part 'init_dependencies.main.dart';
