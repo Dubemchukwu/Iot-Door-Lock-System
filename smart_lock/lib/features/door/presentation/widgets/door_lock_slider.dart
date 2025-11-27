@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:smart_lock/features/door/presentation/bloc/door_bloc.dart';
 import 'package:smart_lock/features/door/presentation/widgets/door_slider_button.dart';
 
-class SDoorLockSlider extends StatelessWidget {
+class SDoorLockSlider extends StatefulWidget {
   const SDoorLockSlider({
     super.key,
     required this.containerHeight,
@@ -16,70 +17,62 @@ class SDoorLockSlider extends StatelessWidget {
   final bool isDoorLocked;
 
   @override
+  State<SDoorLockSlider> createState() => _SDoorLockSliderState();
+}
+
+class _SDoorLockSliderState extends State<SDoorLockSlider> {
+  double dragOffset = 0;
+  final double threshold = 150;
+
+  @override
   Widget build(BuildContext context) {
-    double dragDistance = 0.0;
-    final double threshold = 60.0;
+    final startPos = widget.isDoorLocked
+        ? 0
+        : (widget.containerHeight - widget.buttonSize - 28);
+    final endPos = widget.isDoorLocked
+        ? (widget.containerHeight - widget.buttonSize - 28)
+        : 0.0;
 
     return Stack(
       children: [
+        // The background button
         AnimatedPositioned(
-          duration: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
-          top: isDoorLocked ? (containerHeight - buttonSize - 28) : 0,
+          top: endPos,
           left: 0,
           right: 0,
           child: SDoorSliderButton(
-            icon: isDoorLocked ? Icons.lock_open : Icons.lock,
-            buttonSize: buttonSize,
+            icon: widget.isDoorLocked ? Icons.lock_open : Icons.lock,
+            buttonSize: widget.buttonSize,
           ),
         ),
-        Positioned.fill(
-          child: Center(
-            child: AnimatedRotation(
-              turns: isDoorLocked ? 0.5 : 0,
-              duration: const Duration(milliseconds: 300),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(
-                    Icons.keyboard_arrow_up,
-                    size: 28.0,
-                    color: Colors.white,
-                  ),
-                  Icon(
-                    Icons.keyboard_arrow_up,
-                    size: 28.0,
-                    color: Color(0xFF818181),
-                  ),
-                  Icon(
-                    Icons.keyboard_arrow_up,
-                    size: 28.0,
-                    color: Color(0xFF818181),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        AnimatedPositioned(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-          top: isDoorLocked ? 0 : (containerHeight - buttonSize - 28),
+
+        Positioned(
+          top: startPos + dragOffset,
           left: 0,
           right: 0,
           child: GestureDetector(
-            onPanUpdate: (details) {
-              dragDistance += details.delta.dy;
-
-              if (dragDistance.abs() > threshold) {
-                context.read<DoorBloc>().add(DoorStateToggled());
-                dragDistance = 0;
-              }
+            onPanUpdate: (d) {
+              setState(() {
+                dragOffset += d.delta.dy;
+                dragOffset = dragOffset.clamp(-threshold, threshold);
+              });
             },
+
+            onPanEnd: (_) {
+              if (dragOffset.abs() >= threshold) {
+                HapticFeedback.vibrate();
+                context.read<DoorBloc>().add(DoorStateToggled());
+              }
+
+              setState(() => dragOffset = 0);
+            },
+
             child: SDoorSliderButton(
-              icon: isDoorLocked ? Icons.lock : Icons.lock_open,
+              icon: widget.isDoorLocked ? Icons.lock : Icons.lock_open,
               isPrimary: true,
-              buttonSize: buttonSize,
+              buttonSize: widget.buttonSize,
             ),
           ),
         ),
