@@ -15,6 +15,13 @@ class SValidator {
     return null;
   }
 
+  static String? confirmFormerPin(String? firstValue, String? secondValue) {
+    if (firstValue != secondValue) {
+      return 'Pin does not match existing value';
+    }
+    return null;
+  }
+
   static String? confirmPin(String? firstValue, String? secondValue) {
     if (firstValue != secondValue) {
       return 'Pin does not match';
