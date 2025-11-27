@@ -13,6 +13,7 @@ class PinRemoteDataSourceImpl implements PinRemoteDataSource {
   final Dio dioClient;
   PinRemoteDataSourceImpl({required this.dioClient});
 
+
   @override
   Future<PinDto> getLockPin() async {
     try {

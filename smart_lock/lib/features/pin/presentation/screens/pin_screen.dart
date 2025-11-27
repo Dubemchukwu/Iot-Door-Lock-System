@@ -83,10 +83,16 @@ class _PinScreenState extends State<PinScreen> {
                     ).textTheme.labelMedium?.copyWith(color: SColor.textColor2),
                   ),
                   SizedBox(height: 53.0),
-                  SCustomPinFormField(
-                    label: 'Old PIN',
-                    hint: 'Enter your current PIN',
-                    controller: oldPin,
+                  BlocBuilder<PinBloc, PinState>(
+                    builder: (context, state) => SCustomPinFormField(
+                      label: 'Old PIN',
+                      hint: 'Enter your current PIN',
+                      controller: oldPin,
+                      validate: (value) => SValidator.confirmFormerPin(
+                        state.pin.trim(),
+                        value?.trim(),
+                      ),
+                    ),
                   ),
                   SizedBox(height: SSizes.fontSizeMd),
                   SCustomPinFormField(
