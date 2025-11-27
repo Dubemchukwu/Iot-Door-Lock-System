@@ -5,7 +5,7 @@ import 'package:smart_lock/core/error/exception.dart';
 import 'package:smart_lock/features/control/data/model/manual_control_dto.dart';
 
 abstract interface class ControlRemoteDataSource {
-  Future<void> toggleManualControl({required bool state});
+  Future<void> toggleManualControl({required bool lock});
   Future<ManualControlDto> getManualControlStatus();
 }
 
@@ -37,11 +37,11 @@ class ControlRemoteDataSourceImpl implements ControlRemoteDataSource {
   }
 
   @override
-  Future<void> toggleManualControl({required bool state}) async {
+  Future<void> toggleManualControl({required bool lock}) async {
     try {
       final response = await dioClient.post(
         ApiEndpoints.manualControl,
-        data: {'state': state},
+        data: {'lock': lock},
       );
 
       if (response.statusCode == 200) {

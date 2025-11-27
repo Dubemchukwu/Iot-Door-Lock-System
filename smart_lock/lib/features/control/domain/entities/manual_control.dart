@@ -1,5 +1,5 @@
 class ManualControl {
-  final bool state;
+  final bool lock;
 
-  ManualControl({required this.state});
+  ManualControl({required this.lock});
 }

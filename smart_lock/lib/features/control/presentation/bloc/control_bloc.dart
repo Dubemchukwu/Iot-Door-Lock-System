@@ -36,7 +36,7 @@ class ControlBloc extends Bloc<ControlEvent, ControlState> {
       ),
       (pin) => emit(
         state.copyWith(
-          isManualControlled: pin.state,
+          isManualControlled: pin.lock,
           status: ControlStatus.success,
         ),
       ),
@@ -49,7 +49,7 @@ class ControlBloc extends Bloc<ControlEvent, ControlState> {
   ) async {
     emit(state.copyWith(status: ControlStatus.loading));
     final response = await _toggleManualControl(
-      ToggleManualControlParams(state: !state.isManualControlled),
+      ToggleManualControlParams(lock: !state.isManualControlled),
     );
 
     response.fold(

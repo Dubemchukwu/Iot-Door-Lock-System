@@ -9,12 +9,12 @@ class ToggleManualControl implements UseCase<void, ToggleManualControlParams> {
 
   @override
   Future<Either<Failure, void>> call(ToggleManualControlParams params) async {
-    return await controlRepository.toggleManualControl(state: params.state);
+    return await controlRepository.toggleManualControl(lock: params.lock);
   }
 }
 
 class ToggleManualControlParams {
-  final bool state;
+  final bool lock;
 
-  ToggleManualControlParams({required this.state});
+  ToggleManualControlParams({required this.lock});
 }

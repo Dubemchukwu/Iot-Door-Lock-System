@@ -28,14 +28,14 @@ class ControlRepositoryImpl implements ControlRepository {
 
   @override
   Future<Either<Failure, void>> toggleManualControl({
-    required bool state,
+    required bool lock,
   }) async {
     final isConnected = await connectionChecker.isConnected;
     if (!isConnected) {
       return Left(Failure("Internet Connection is required"));
     }
     return await executeRepositoryOperation(() async {
-      return await controlRemoteDataSource.toggleManualControl(state: state);
+      return await controlRemoteDataSource.toggleManualControl(lock: lock);
     });
   }
 }
