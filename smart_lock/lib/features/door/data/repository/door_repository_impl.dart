@@ -26,13 +26,13 @@ class DoorRepositoryImpl implements DoorRepository {
   }
 
   @override
-  Future<Either<Failure, void>> updateDoorState({required bool lock}) async {
+  Future<Either<Failure, void>> updateDoorState({required bool state}) async {
     final isConnected = await connectionChecker.isConnected;
     if (!isConnected) {
       return Left(Failure("Internet Connection is required"));
     }
     return await executeRepositoryOperation(() async {
-      return await doorRemoteDataSource.updateDoorState(lock: lock);
+      return await doorRemoteDataSource.updateDoorState(state: state);
     });
   }
 }

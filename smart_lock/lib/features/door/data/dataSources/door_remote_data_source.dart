@@ -5,22 +5,22 @@ import 'package:smart_lock/core/error/exception.dart';
 import 'package:smart_lock/features/door/data/models/door_state_dto.dart';
 
 abstract interface class DoorRemoteDataSource {
-  Future<void> updateDoorState({required bool lock});
+  Future<void> updateDoorState({required bool state});
 
   Future<DoorStateDto> getDoorState();
 }
 
 class DoorRemoteDataSourceImpl implements DoorRemoteDataSource {
   final Dio dioClient;
-
   DoorRemoteDataSourceImpl({required this.dioClient});
 
+
   @override
-  Future<void> updateDoorState({required bool lock}) async {
+  Future<void> updateDoorState({required bool state}) async {
     try {
       final response = await dioClient.post(
         ApiEndpoints.door,
-        data: {'lock': lock},
+        data: {'state': state},
       );
 
       if (response.statusCode == 200) {

@@ -1,5 +1,5 @@
 class DoorState {
-  final bool lock;
+  final bool state;
 
-  DoorState({required this.lock});
+  DoorState({required this.state});
 }

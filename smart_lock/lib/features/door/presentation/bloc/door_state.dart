@@ -27,7 +27,7 @@ class DoorState extends Equatable {
 
   @override
   String toString() {
-    return '''ControlState { status: $status, isManualControlled: $isDoorLocked }''';
+    return '''DoorState { status: $status, isDoorLocked: $isDoorLocked }''';
   }
 
   @override

@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:logger/logger.dart';
 import 'package:smart_lock/core/common/params/no_params.dart';
 import 'package:smart_lock/features/door/domain/useCases/get_door_state.dart';
 import 'package:smart_lock/features/door/domain/useCases/update_door_state.dart';
@@ -10,6 +11,8 @@ part 'door_event.dart';
 class DoorBloc extends Bloc<DoorEvent, DoorState> {
   final GetDoorState _getDoorState;
   final UpdateDoorState _updateDoorState;
+
+  var logger = Logger();
 
   DoorBloc({
     required GetDoorState getDoorState,
@@ -35,7 +38,7 @@ class DoorBloc extends Bloc<DoorEvent, DoorState> {
       ),
       (door) => emit(
         state.copyWith(
-          isDoorLocked: door.lock,
+          isDoorLocked: door.state,
           status: DoorStatus.success,
           errorMessage: null,
         ),
@@ -48,8 +51,9 @@ class DoorBloc extends Bloc<DoorEvent, DoorState> {
     Emitter<DoorState> emit,
   ) async {
     emit(state.copyWith(isDoorLocked: !state.isDoorLocked));
+
     final response = await _updateDoorState(
-      UpdateDoorStateParams(lock: !state.isDoorLocked),
+      UpdateDoorStateParams(state: state.isDoorLocked),
     );
 
     response.fold(

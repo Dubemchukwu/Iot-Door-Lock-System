@@ -10,12 +10,12 @@ class UpdateDoorState implements UseCase<void, UpdateDoorStateParams> {
 
   @override
   Future<Either<Failure, void>> call(UpdateDoorStateParams params) async {
-    return await doorRepository.updateDoorState(lock: params.lock);
+    return await doorRepository.updateDoorState(state: params.state);
   }
 }
 
 class UpdateDoorStateParams {
-  final bool lock;
+  final bool state;
 
-  UpdateDoorStateParams({required this.lock});
+  UpdateDoorStateParams({required this.state});
 }
